@@ -1,0 +1,25 @@
+SELECT instance_type AS instance_type,
+       count(DISTINCT node_name) AS "COUNT_DISTINCT(node_name)"
+FROM
+  (WITH confidential_nodes AS
+     (SELECT date, cluster_id,
+                   JSON_EXTRACT_SCALAR(content, '$.spec.providerSpec.value.confidentialCompute') as confidential_compute,
+                   JSON_EXTRACT_SCALAR(content, '$.spec.providerSpec.value.kind') as provider,
+                   JSON_EXTRACT_SCALAR(content, '$.metadata.labels["machine.openshift.io/instance-type"]') as instance_type,
+                   JSON_EXTRACT_SCALAR(content, '$.spec.providerSpec.value.machineType') as machine_type,
+                   JSON_EXTRACT_SCALAR(content, '$.metadata.name') as node_name
+      from raw_io_archives
+      WHERE content LIKE '%confidentialCompute%'
+        AND date = cast(current_date - interval '1' day as VARCHAR)
+        AND file_path LIKE 'config/machines/openshift-machine-api/%.json' ) SELECT CONCAT(provider, '_', machine_type) as provider_machine,
+                                                                                   provider,
+                                                                                   instance_type,
+                                                                                   node_name,
+                                                                                   cn.cluster_id,
+                                                                                   ca.email_domain
+   FROM confidential_nodes cn
+   LEFT JOIN cluster_accounts ca ON ca.cluster_id = cn.cluster_id
+   AND ca.date = cast(current_date - interval '1' day as VARCHAR)) AS virtual_table
+GROUP BY instance_type
+ORDER BY "COUNT_DISTINCT(node_name)" DESC
+LIMIT 1000;

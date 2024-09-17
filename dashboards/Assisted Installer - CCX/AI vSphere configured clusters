@@ -1,0 +1,59 @@
+SELECT configured AS configured,
+       count(*) AS count
+FROM
+  (WITH installed_clusters AS
+     (SELECT DISTINCT cluster_id as openshift_cluster_id,
+                      email_domain,
+                      internal,
+                      date("date") AS installed_on
+      FROM ccx_sensitive.assisted_installer_results
+      WHERE "result" = 'installed'
+        AND date("date") >= date_add('day', -90, current_date)
+        AND date("date") < current_date ) ,
+        reporting_clusters AS
+     (SELECT cluster_id,
+             MAX(email_domain) AS email_domain,
+             MAX(AI.internal) AS internal,
+             MAX(AI.installed_on) AS installed_on,
+             date(MAX(C.date)) AS reporting_until
+      FROM installed_clusters AI
+      LEFT JOIN ccx.clusters C ON C.cluster_id = AI.openshift_cluster_id
+      WHERE C.platform = 'VSphere'
+      GROUP BY C.cluster_id) ,
+        unconfigured_clusters AS
+     (SELECT C.cluster_id,
+             IF(MAX(R.date) IS NULL, MIN(C.installed_on), date(MAX(R.date))) AS unconfigured_until
+      FROM reporting_clusters C
+      LEFT JOIN
+        (SELECT *
+         FROM ccx.rule_hits
+         WHERE rule_id = 'modify_vsphere_conf_after_assisted_install|MODIFY_VSPHERE_CONF_AFTER_ASSISTED_INSTALL') R ON R.cluster_id = C.cluster_id
+      GROUP BY C.cluster_id) ,
+        report AS
+     (SELECT C.*,
+             IF(C.reporting_until IS NULL, 0, date_diff('day', C.installed_on, C.reporting_until) + 1) AS reporting_days,
+             IF(C.reporting_until IS NULL, FALSE, C.reporting_until = date_add('day', -1, current_date)) AS alive,
+             UC.unconfigured_until,
+             IF(UC.unconfigured_until IS NULL
+                OR C.reporting_until IS NULL, NULL, UC.unconfigured_until < C.reporting_until) AS configured,
+             IF(UC.unconfigured_until IS NULL
+                OR C.reporting_until IS NULL
+                OR UC.unconfigured_until = C.reporting_until, NULL, date_diff('day', C.installed_on, UC.unconfigured_until)) AS unconfigured_days
+      FROM reporting_clusters C
+      LEFT JOIN unconfigured_clusters UC ON C.cluster_id = UC.cluster_id) SELECT cluster_id,
+                                                                                 email_domain,
+                                                                                 internal,
+                                                                                 installed_on,
+                                                                                 reporting_until,
+                                                                                 reporting_days,
+                                                                                 alive,
+                                                                                 unconfigured_until,
+                                                                                 IF(configured, 'yes', 'no') as configured,
+                                                                                 unconfigured_days
+   FROM report) AS virtual_table
+WHERE installed_on >= DATE '2024-08-17'
+  AND installed_on < DATE '2024-09-17'
+  AND internal IN (false)
+GROUP BY configured
+ORDER BY count DESC
+LIMIT 1000;

@@ -1,0 +1,57 @@
+SELECT manufacturer_product AS manufacturer_product,
+       COUNT(DISTINCT host_id) AS hosts
+FROM
+  (WITH host_data AS
+     (SELECT ai_cluster_id AS cluster_id,
+             updated_at,
+             created_at,
+             cluster_id AS openshift_cluster_id,
+             JSON_EXTRACT_SCALAR(h.content, '$.id') AS host_id,
+             h.content,
+             JSON_EXTRACT(h.content, '$.host_inventory') AS inventory,
+             "date"
+      FROM ccx_sensitive.raw_assisted_installer_clusters r
+      CROSS JOIN UNNEST(CAST(JSON_EXTRACT(r.content, '$.hosts') AS ARRAY(json))) AS h(content)
+      WHERE "date" >= '2022-09-15' ),
+        host_data_by_day AS
+     (SELECT cluster_id,
+             host_id,
+             MAX(openshift_cluster_id) as openshift_cluster_id,
+             MAX_BY(inventory, updated_at) AS inventory,
+             MAX(updated_at) AS updated_at,
+             MAX(created_at) AS created_at,
+             "date"
+      FROM host_data
+      GROUP BY cluster_id,
+               host_id,
+               "date"),
+        manufcaturer_product AS
+     (SELECT h.cluster_id,
+             h.host_id,
+             COALESCE(JSON_EXTRACT_SCALAR(h.inventory, '$.system_vendor.manufacturer'), 'false') AS virtual,
+             JSON_EXTRACT_SCALAR(h.inventory, '$.system_vendor.manufacturer') AS manufacturer,
+             JSON_EXTRACT_SCALAR(h.inventory, '$.system_vendor.product_name') AS product,
+             CONCAT(JSON_EXTRACT_SCALAR(h.inventory, '$.system_vendor.manufacturer'), ' ', JSON_EXTRACT_SCALAR(h.inventory, '$.system_vendor.product_name')) as manufacturer_product,
+             DATE(h."date") as observed_at,
+             c.internal
+      FROM host_data_by_day h
+      LEFT JOIN ccx.clusters c ON(h.openshift_cluster_id=c.cluster_id)
+      WHERE inventory IS NOT NULL ),
+        until_last_week_manufacturer_product AS
+     (SELECT m.manufacturer_product
+      FROM manufcaturer_product m
+      WHERE observed_at < DATE(date_add('day', -7, NOW())) ),
+        this_week AS
+     (SELECT *
+      FROM manufcaturer_product
+      WHERE observed_at > DATE(date_add('day', -7, NOW())) ) SELECT tw.*
+   FROM this_week tw
+   LEFT JOIN until_last_week_manufacturer_product lw ON tw.manufacturer_product = lw.manufacturer_product
+   WHERE lw.manufacturer_product IS NULL
+     AND tw.manufacturer_product IS NOT NULL) AS virtual_table
+WHERE observed_at >= DATE '2024-08-17'
+  AND observed_at < DATE '2024-09-17'
+  AND internal IN (false)
+GROUP BY manufacturer_product
+ORDER BY hosts DESC
+LIMIT 1000;

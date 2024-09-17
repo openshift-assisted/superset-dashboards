@@ -1,0 +1,11 @@
+SELECT feature AS feature,
+       result AS result,
+                 COUNT(DISTINCT cluster_id) AS installs
+FROM ccx_sensitive.assisted_installer_results_with_features
+WHERE event_time >= TIMESTAMP '2024-09-10 00:00:00.000000'
+  AND event_time < TIMESTAMP '2024-09-17 00:00:00.000000'
+  AND internal IN (false)
+GROUP BY feature,
+         result
+ORDER BY installs DESC
+LIMIT 10000;

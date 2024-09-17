@@ -1,0 +1,46 @@
+SELECT date_trunc('day', CAST(date AS TIMESTAMP)) AS __timestamp,
+       AVG(lifetime) AS "Average lifetime",
+       approx_percentile(lifetime, 0.9) AS "Lifetime 90th percentile",
+       approx_percentile(lifetime, 0.75) AS "Lifetime 75th percentile",
+       approx_percentile(lifetime, 0.5) AS "Lifetime 50th percentile"
+FROM
+  (WITH all_dates AS
+     (SELECT DATE("date") as "date"
+      FROM hive.ccx.clusters
+      GROUP BY "date"
+      ORDER BY "date" ASC),
+        accounts AS
+     (SELECT cluster_id,
+             LOWER(email_domain) as email_domain
+      FROM hive.ccx_sensitive.cluster_accounts ca
+      GROUP BY cluster_id,
+               email_domain),
+        clusters_first_last_date AS
+     (SELECT cluster_id,
+             MIN_BY(total_count, "date") as total_count,
+             MIN_BY(install_type, "date") as install_type,
+             DATE(MIN(date)) as first_seen,
+             DATE(MAX(date)) as last_seen
+      FROM hive.ccx.clusters
+      WHERE internal = false
+        AND ebs_account_obf != '94d1e6835f'
+        AND install_type IN ('assisted-installer')
+      GROUP BY cluster_id),
+        lifetime_over_time AS
+     (SELECT d."date",
+             c.cluster_id,
+             c.total_count,
+             c.install_type,
+             c.last_seen,
+             DATE_DIFF('day', c.first_seen, IF(c.last_seen > d."date", d."date", c.last_seen)) as lifetime
+      FROM all_dates d
+      LEFT JOIN clusters_first_last_date c ON first_seen <= d."date"
+      AND last_seen >= d."date") SELECT l.*,
+                                        ca.email_domain
+   FROM lifetime_over_time l
+   LEFT JOIN accounts ca ON l.cluster_id = ca.cluster_id) AS virtual_table
+WHERE install_type != 'NULL'
+  AND install_type = 'assisted-installer'
+GROUP BY date_trunc('day', CAST(date AS TIMESTAMP))
+ORDER BY "Average lifetime" DESC
+LIMIT 10000;

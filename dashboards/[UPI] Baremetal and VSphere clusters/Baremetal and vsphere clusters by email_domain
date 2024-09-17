@@ -1,0 +1,17 @@
+SELECT email_domain AS email_domain,
+       count(DISTINCT cluster_id) AS "COUNT_DISTINCT(cluster_id)"
+FROM
+  (SELECT ca.email_domain,
+          cluster_id,
+          platform
+   FROM ccx.clusters c
+   LEFT JOIN ccx_sensitive.cluster_accounts ca USING (cluster_id)
+   WHERE c.install_type = 'upi'
+     AND c.platform IN ('BareMetal',
+                        'VSphere')) AS virtual_table
+WHERE email_domain NOT IN ('redhat.com')
+  AND platform IN ('BareMetal',
+                   'VSphere')
+GROUP BY email_domain
+ORDER BY "COUNT_DISTINCT(cluster_id)" DESC
+LIMIT 1000;

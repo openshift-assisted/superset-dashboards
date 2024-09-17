@@ -1,0 +1,39 @@
+SELECT date_trunc('day', CAST(last_attempt_time AS TIMESTAMP)) AS __timestamp,
+       eventually_installed AS eventually_installed,
+       AVG(attempts) AS "AVG(attempts)"
+FROM
+  (WITH installed_clusters AS
+     (SELECT ai_cluster_id
+      FROM assisted_installer_results
+      WHERE result = 'installed' ),
+        attempts AS
+     (SELECT ai_cluster_id, MAX(internal) as internal, COUNT(1) as attempts, MAX(event_time) as last_attempt_time
+      FROM assisted_installer_results
+      GROUP BY ai_cluster_id) SELECT a.*,
+                                     if(i.ai_cluster_id IS NULL, false, true) as eventually_installed
+   FROM attempts a
+   LEFT JOIN installed_clusters i ON i.ai_cluster_id = a.ai_cluster_id) AS virtual_table
+GROUP BY eventually_installed,
+         date_trunc('day', CAST(last_attempt_time AS TIMESTAMP))
+ORDER BY "AVG(attempts)" DESC
+LIMIT 1000;
+
+SELECT date_trunc('day', CAST(last_attempt_time AS TIMESTAMP)) AS __timestamp,
+       eventually_installed AS eventually_installed,
+       count(DISTINCT ai_cluster_id) AS "COUNT_DISTINCT(ai_cluster_id)"
+FROM
+  (WITH installed_clusters AS
+     (SELECT ai_cluster_id
+      FROM assisted_installer_results
+      WHERE result = 'installed' ),
+        attempts AS
+     (SELECT ai_cluster_id, MAX(internal) as internal, COUNT(1) as attempts, MAX(event_time) as last_attempt_time
+      FROM assisted_installer_results
+      GROUP BY ai_cluster_id) SELECT a.*,
+                                     if(i.ai_cluster_id IS NULL, false, true) as eventually_installed
+   FROM attempts a
+   LEFT JOIN installed_clusters i ON i.ai_cluster_id = a.ai_cluster_id) AS virtual_table
+GROUP BY eventually_installed,
+         date_trunc('day', CAST(last_attempt_time AS TIMESTAMP))
+ORDER BY "COUNT_DISTINCT(ai_cluster_id)" DESC
+LIMIT 1000;

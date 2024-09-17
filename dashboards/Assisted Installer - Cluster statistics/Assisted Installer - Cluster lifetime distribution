@@ -1,0 +1,44 @@
+SELECT lifetime_bucket AS lifetime_bucket,
+       count(*) AS count
+FROM
+  (WITH clusters_first_last_date AS
+     (SELECT cluster_id,
+             MIN_BY(install_type, "date") as install_type,
+             DATE(MIN(date)) as first_seen,
+             DATE(MAX(date)) as last_seen
+      FROM hive.ccx.clusters
+      WHERE internal = false
+        AND ebs_account_obf != '94d1e6835f'
+      GROUP BY cluster_id),
+        accounts AS
+     (SELECT cluster_id,
+             LOWER(email_domain) as email_domain
+      FROM hive.ccx_sensitive.cluster_accounts ca
+      GROUP BY cluster_id,
+               email_domain),
+        lifetime as
+     (SELECT c.cluster_id,
+             install_type,
+             first_seen,
+             last_seen,
+             last_seen - first_seen as lifetime_duration,
+             DATE_DIFF('day', first_seen, last_seen) as lifetime,
+             ca.email_domain
+      FROM clusters_first_last_date c
+      LEFT JOIN accounts ca ON c.cluster_id = ca.cluster_id) SELECT l.*,
+                                                                    CASE
+                                                                        WHEN lifetime = 0 THEN '0'
+                                                                        WHEN lifetime < 4 THEN '01-03'
+                                                                        WHEN lifetime < 8 THEN '04-07'
+                                                                        WHEN lifetime < 15 THEN '08-14'
+                                                                        WHEN lifetime < 31 THEN '14-30'
+                                                                        WHEN lifetime < 61 THEN '30-60'
+                                                                        WHEN lifetime < 91 THEN '60-90'
+                                                                        ELSE '90+'
+                                                                    END as lifetime_bucket
+   FROM lifetime l
+   ORDER BY lifetime_bucket ASC) AS virtual_table
+WHERE install_type IN ('assisted-installer')
+GROUP BY lifetime_bucket
+ORDER BY count DESC
+LIMIT 100000;

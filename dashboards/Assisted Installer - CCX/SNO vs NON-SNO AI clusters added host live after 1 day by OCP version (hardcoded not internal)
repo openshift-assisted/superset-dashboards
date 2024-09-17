@@ -1,0 +1,76 @@
+SELECT openshift_minor_version AS openshift_minor_version,
+       is_sno AS is_sno,
+       running AS running,
+       count(*) AS count
+FROM
+  (WITH running_hosts AS
+     (SELECT cluster_id,
+             host_name,
+             date("date") AS "date"
+      FROM ccx_sensitive.nodes
+      WHERE date("date") >= date_add('day', -90, current_date)
+        AND date("date") < current_date ),
+        prep_clusters AS
+     (SELECT C.ai_cluster_id,
+             C.updated_at,
+             json_extract_scalar(C.content, '$.openshift_cluster_id') as openshift_cluster_id,
+             json_extract_scalar(C.content, '$.openshift_version') as openshift_version,
+             if(json_extract_scalar(C.content, '$.high_availability_mode') IS NULL, IF(json_extract_scalar(C.content, '$.total_host_count') IS NULL, NULL, IF(cast(json_extract_scalar(C.content, '$.total_host_count') as integer) > 1, false, true)), json_extract_scalar(C.content, '$.high_availability_mode') = 'None') as is_sno
+      FROM ccx_sensitive.raw_assisted_installer_clusters C),
+        clusters_ids AS
+     (SELECT C.ai_cluster_id,
+             MAX(C.is_sno) as is_sno,
+             MAX_BY(C.openshift_cluster_id, C.updated_at) as openshift_cluster_id,
+             MAX_BY(C.openshift_version, C.updated_at) as openshift_version
+      FROM prep_clusters C
+      INNER JOIN
+        (SELECT ai_cluster_id,
+                MAX(updated_at) AS last_update
+         FROM prep_clusters
+         GROUP BY ai_cluster_id) AS C2 ON C.ai_cluster_id = C2.ai_cluster_id
+      GROUP BY C.ai_cluster_id),
+        added_hosts AS
+     (SELECT E.ai_cluster_id as cluster_id,
+             C.openshift_cluster_id,
+             regexp_extract(CC.cluster_version, '(\d+\.\d+)\..*', 1) as openshift_minor_version,
+             C.is_sno,
+             regexp_extract(content, '"Host ([^:]+): updated status (.*) to added-to-existing-cluster', 1) AS host_name,
+             date(E."date") AS added_on
+      FROM ccx_sensitive.raw_assisted_installer_events E
+      LEFT JOIN clusters_ids C ON E.ai_cluster_id = C.ai_cluster_id
+      INNER JOIN ccx.clusters CC ON CC.cluster_id = C.openshift_cluster_id
+      WHERE C.ai_cluster_id IS NOT NULL
+        AND E.content LIKE '%added-to-existing-cluster%'
+        AND E.content NOT LIKE '% updated status from added-to-existing-cluster to installing-pending-user-action%'
+        AND date(E."date") >= date_add('day', -90, current_date)
+        AND date(E."date") < date_add('day', -1, current_date) ),
+        report AS
+     (SELECT AI.*,
+             (NOT CCX.host_name IS NULL) AS running
+      FROM added_hosts AI
+      LEFT JOIN running_hosts CCX ON CCX.cluster_id = AI.openshift_cluster_id
+      AND CCX.host_name = AI.host_name
+      AND CCX.date = date_add('day', 1, AI.added_on)) SELECT cluster_id,
+                                                             openshift_cluster_id,
+                                                             MAX_BY(openshift_minor_version, added_on) as openshift_minor_version,
+                                                             count(host_name) as added_hosts,
+                                                             running,
+                                                             MIN(added_on) as added_on,
+                                                             MIN_BY(CASE is_sno
+                                                                        WHEN True THEN 'SNO'
+                                                                        WHEN False THEN 'NOT SNO'
+                                                                        ELSE 'UNKNOWN SNO'
+                                                                    END , added_on) as is_sno
+   FROM report
+   GROUP BY cluster_id,
+            openshift_cluster_id,
+            host_name,
+            running,
+            is_sno) AS virtual_table
+WHERE added_on >= DATE '2024-08-17'
+  AND added_on < DATE '2024-09-17'
+GROUP BY openshift_minor_version,
+         is_sno,
+         running
+ORDER BY count DESC
+LIMIT 1000;

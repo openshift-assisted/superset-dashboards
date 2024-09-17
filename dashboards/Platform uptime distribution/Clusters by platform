@@ -1,0 +1,22 @@
+SELECT platform AS platform,
+       count(*) AS count
+FROM
+  (SELECT if(platform='None', CASE(host_type)
+                                  WHEN 'metal' THEN 'BareMetal'
+                                  WHEN 'vmware' THEN 'VSphere'
+                                  ELSE 'other'
+                              END, platform) as platform,
+          host_type,
+          CAST(DAY(date('2024-02-01') - date("install_date")) AS INT) as uptime,
+          internal,
+          install_type,
+          install_date
+   FROM ccx.clusters
+   WHERE "date" = '2024-02-01') AS virtual_table
+WHERE install_date >= TIMESTAMP '2022-02-05 00:00:00.000000'
+  AND install_date < TIMESTAMP '2024-02-05 00:00:00.000000'
+  AND uptime >= 29
+  AND internal IN (false)
+GROUP BY platform
+ORDER BY count DESC
+LIMIT 10000;

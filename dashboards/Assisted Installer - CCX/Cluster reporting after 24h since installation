@@ -1,0 +1,41 @@
+SELECT reporting AS reporting,
+       count(*) AS count
+FROM
+  (WITH installed_clusters AS
+     (SELECT DISTINCT cluster_id as openshift_cluster_id,
+                      email_domain,
+                      internal,
+                      date("date") AS installed_on
+      FROM ccx_sensitive.assisted_installer_results
+      WHERE "result" = 'installed'
+        AND date("date") >= date_add('day', -30, current_date)
+        AND date("date") < current_date ),
+        reporting_clusters AS
+     (SELECT cluster_id,
+             MAX(email_domain) AS email_domain,
+             MAX(AI.internal) AS internal,
+             MAX(AI.installed_on) AS installed_on,
+             date(MAX(C.date)) AS reporting_until
+      FROM installed_clusters AI
+      LEFT JOIN ccx.clusters C ON C.cluster_id = AI.openshift_cluster_id
+      GROUP BY C.cluster_id),
+        report AS
+     (SELECT *,
+             IF(C.reporting_until IS NULL, 0, date_diff('day', C.installed_on, C.reporting_until) + 1) AS reporting_days,
+             IF(C.reporting_until IS NOT NULL, TRUE, FALSE) AS reporting,
+             IF(C.reporting_until IS NULL, FALSE, C.reporting_until = date_add('day', -1, current_date)) AS alive
+      FROM reporting_clusters C) SELECT cluster_id,
+                                        email_domain,
+                                        internal,
+                                        installed_on,
+                                        reporting_until,
+                                        reporting_days,
+                                        reporting,
+                                        alive
+   FROM report) AS virtual_table
+WHERE installed_on >= DATE '2024-08-17'
+  AND installed_on < DATE '2024-09-17'
+  AND internal IN (false)
+GROUP BY reporting
+ORDER BY count DESC
+LIMIT 1000;

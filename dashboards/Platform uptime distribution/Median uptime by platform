@@ -1,0 +1,20 @@
+SELECT platform AS platform,
+       approx_percentile(uptime, 0.5) AS "approx_percentile(uptime, 0.5)"
+FROM
+  (SELECT if(platform='None', CASE(host_type)
+                                  WHEN 'metal' THEN 'BareMetal'
+                                  WHEN 'vmware' THEN 'VSphere'
+                                  ELSE 'other'
+                              END, platform) as platform,
+          host_type,
+          CAST(DAY(date('2024-02-01') - date("install_date")) AS INT) as uptime,
+          internal,
+          install_type,
+          install_date
+   FROM ccx.clusters
+   WHERE "date" = '2024-02-01') AS virtual_table
+WHERE uptime >= 29
+  AND internal IN (false)
+GROUP BY platform
+ORDER BY "approx_percentile(uptime, 0.5)" DESC
+LIMIT 10000;

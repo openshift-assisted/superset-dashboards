@@ -1,0 +1,82 @@
+SELECT date_trunc('day', CAST(created_at AS TIMESTAMP)) AS __timestamp,
+       status AS status,
+       count(DISTINCT ai_cluster_id) AS "COUNT_DISTINCT(ai_cluster_id)"
+FROM
+  (WITH installed_clusters as
+     (SELECT ai_cluster_id
+      FROM raw_assisted_installer_clusters raw
+      WHERE JSON_VALUE(content, 'strict $.status') = 'installing'
+      GROUP BY ai_cluster_id),
+        added_hosts AS
+     (SELECT DISTINCT(ai_cluster_id) as ai_cluster_id
+      from raw_assisted_installer_events
+      WHERE content LIKE '%"name": "host_registration_succeeded"%'
+      GROUP BY ai_cluster_id),
+        validations_info AS
+     (SELECT raw_assisted_installer_clusters.ai_cluster_id,
+             MIN(created_at) as created_at,
+             MAX(updated_at) as updated_at,
+             MAX_BY(json_value(content, 'lax $.email_domain'), updated_at) as email_domain,
+             MAX_BY(json_value(content, 'lax $.validations_info'), updated_at) as vinfo,
+             MAX_BY(JSON_VALUE(content, 'strict $.status'), updated_at) as status,
+             MAX_BY(JSON_VALUE(content, 'strict $.status_info'), updated_at) as status_info,
+             MAX_BY(JSON_VALUE(content, 'strict $.high_availability_mode'), updated_at) as ha_mode,
+             CAST(MAX_BY(JSON_VALUE(content, 'strict $.hosts.size()'), updated_at) AS INTEGER) as n_hosts,
+             MAX_BY(JSON_VALUE(content, 'lax $.hosts[*].status'), updated_at) as host_statuses,
+             MAX_BY(JSON_VALUE(content, 'lax $.hosts[*].status_info'), updated_at) as host_statuses_info
+      FROM raw_assisted_installer_clusters
+      INNER JOIN added_hosts ah ON raw_assisted_installer_clusters.ai_cluster_id = ah.ai_cluster_id
+      WHERE raw_assisted_installer_clusters.ai_cluster_id NOT IN
+          (SELECT ai_cluster_id
+           FROM installed_clusters)
+        AND NOT (email_domain LIKE '%redhat.com'
+                 or email_domain LIKE '%ibm.com'
+                 or email_domain LIKE '%juniper.net')
+        AND length(content) < 25000000
+      GROUP BY raw_assisted_installer_clusters.ai_cluster_id),
+        array_vinfo AS
+     (SELECT ai_cluster_id,
+             status,
+             created_at,
+             status_info,
+             updated_at,
+             ha_mode,
+             n_hosts,
+             host_statuses,
+             host_statuses_info,
+             CAST(json_extract(vinfo, '$.network') AS ARRAY<MAP<VARCHAR, VARCHAR>>) as network_array,
+             CAST(json_extract(vinfo, '$.configuration') AS ARRAY<MAP<VARCHAR, VARCHAR>>) as configuration_array,
+             CAST(json_extract(vinfo, '$.operators') AS ARRAY<MAP<VARCHAR, VARCHAR>>) as operators_array,
+             CAST(json_extract(vinfo, '$["hosts-data"]') AS ARRAY<MAP<VARCHAR, VARCHAR>>) as hosts_data_array,
+             vinfo
+      FROM validations_info vi),
+        merged as
+     (SELECT concat(network_array, configuration_array, operators_array, hosts_data_array) as failed_validations,
+             status,
+             status_info,
+             ai_cluster_id,
+             updated_at,
+             ha_mode,
+             n_hosts,
+             host_statuses,
+             host_statuses_info,
+             created_at
+      FROM array_vinfo) SELECT status,
+                               status_info,
+                               ai_cluster_id,
+                               updated_at,
+                               created_at,
+                               n_hosts,
+                               host_statuses,
+                               host_statuses_info,
+                               if(ha_mode = 'Full', 'non-SNO', 'SNO') as ha_type,
+                               reason['id'] as reason_id,
+                               reason['status'] as reason_status,
+                               reason['message'] as reason_message
+   FROM merged
+   CROSS JOIN UNNEST(failed_validations) as t(reason)
+   WHERE reason['status'] != 'success') AS virtual_table
+GROUP BY status,
+         date_trunc('day', CAST(created_at AS TIMESTAMP))
+ORDER BY "COUNT_DISTINCT(ai_cluster_id)" DESC
+LIMIT 1000;

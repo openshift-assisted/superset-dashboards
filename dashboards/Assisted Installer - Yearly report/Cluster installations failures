@@ -1,0 +1,35 @@
+SELECT date_trunc('month', CAST(date AS TIMESTAMP)) AS __timestamp,
+       status_info AS status_info,
+       count(*) AS count
+FROM
+  (WITH finalized_clusters AS
+     (SELECT ai_cluster_id,
+             event_time, date, JSON_EXTRACT_SCALAR(JSON_VALUE(content, 'strict $.props'), '$.result') as result,
+                               JSON_VALUE(content, 'strict $.props') as props,
+                               content
+      FROM raw_assisted_installer_events
+      WHERE content LIKE '%\"result\":\"error\"%'
+        AND date >= '2023-01-01' ),
+        last_error_cluster_content AS
+     (SELECT ai_cluster_id,
+             MAX(updated_at) as updated_at,
+             MAX_BY(fc.date, updated_at) as date,
+             MAX_BY(rc.content, updated_at) as content
+      FROM raw_assisted_installer_clusters rc
+      INNER JOIN finalized_clusters fc USING(ai_cluster_id)
+      WHERE fc.result = 'error'
+        AND updated_at <= fc.event_time
+        AND rc.date >= '2023-01-01'
+      GROUP BY ai_cluster_id),
+        last_status_info AS
+     (SELECT ai_cluster_id,
+             updated_at, date, JSON_EXTRACT_SCALAR(content, '$.status_info') as status_info,
+                               JSON_EXTRACT_SCALAR(content, '$.status') as status
+      FROM last_error_cluster_content) SELECT *
+   FROM last_status_info) AS virtual_table
+WHERE date >= '2023-01-01 00:00:00.000000'
+  AND date < '2023-12-31 23:59:59.000000'
+GROUP BY status_info,
+         date_trunc('month', CAST(date AS TIMESTAMP))
+ORDER BY count DESC
+LIMIT 1000;

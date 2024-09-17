@@ -1,0 +1,46 @@
+SELECT manufacturer AS manufacturer,
+       product AS product,
+       count(DISTINCT host_id) AS hosts
+FROM
+  (WITH host_data AS
+     (SELECT ai_cluster_id AS cluster_id,
+             updated_at,
+             created_at,
+             cluster_id AS openshift_cluster_id,
+             JSON_EXTRACT_SCALAR(h.content, '$.id') AS host_id,
+             h.content,
+             JSON_EXTRACT(h.content, '$.host_inventory') AS inventory,
+             "date"
+      FROM ccx_sensitive.raw_assisted_installer_clusters r
+      CROSS JOIN UNNEST(CAST(JSON_EXTRACT(r.content, '$.hosts') AS ARRAY(json))) AS h(content)
+      WHERE "date" >= '2022-09-15' ),
+        host_data_by_day AS
+     (SELECT cluster_id,
+             host_id,
+             MAX(openshift_cluster_id) as openshift_cluster_id,
+             MAX_BY(inventory, updated_at) AS inventory,
+             MAX(updated_at) AS updated_at,
+             MAX(created_at) AS created_at,
+             "date"
+      FROM host_data
+      GROUP BY cluster_id,
+               host_id,
+               "date") SELECT h.cluster_id,
+                              h.host_id,
+                              JSON_EXTRACT_SCALAR(h.inventory, '$.system_vendor.manufacturer') AS manufacturer,
+                              JSON_EXTRACT_SCALAR(h.inventory, '$.system_vendor.product_name') AS product,
+                              CONCAT(JSON_EXTRACT_SCALAR(h.inventory, '$.system_vendor.manufacturer'), ' ', JSON_EXTRACT_SCALAR(h.inventory, '$.system_vendor.product_name')) AS manufacturer_product,
+                              DATE(h."date") as observed_at,
+                              IF(JSON_EXTRACT_SCALAR(h.inventory, '$.system_vendor.manufacturer') IN ('QEMU', 'RDO'), 'true', COALESCE(JSON_EXTRACT_SCALAR(h.inventory, '$.system_vendor.virtual'), 'false')) as virtual,
+                              c.internal
+   FROM host_data_by_day h
+   LEFT JOIN ccx.clusters c ON(h.openshift_cluster_id=c.cluster_id)
+   WHERE inventory IS NOT NULL) AS virtual_table
+WHERE observed_at >= DATE '2024-08-17'
+  AND observed_at < DATE '2024-09-17'
+  AND internal IN (false)
+  AND virtual IN ('false')
+  AND manufacturer IS NOT NULL
+GROUP BY manufacturer,
+         product
+LIMIT 1000;

@@ -1,0 +1,11 @@
+SELECT count(distinct cluster_id) AS "count(distinct cluster_id)"
+FROM
+  (select event_time as created_at,
+          ai_cluster_id as cluster_id,
+          json_extract_scalar(content, '$.name') as name,
+          json_extract_scalar(content, '$.message') as message
+   from raw_assisted_installer_events) AS virtual_table
+WHERE created_at >= TIMESTAMP '2024-09-10 00:00:00.000000'
+  AND created_at < TIMESTAMP '2024-09-17 00:00:00.000000'
+  AND name = 'upgrade_agent_failed'
+LIMIT 50000;

@@ -1,0 +1,32 @@
+SELECT count(distinct host_id) AS "count(distinct host_id)"
+FROM
+  (with cluster_data as
+     (select max_by(created_at, updated_at) as created_at,
+             ai_cluster_id as cluster_id,
+             max_by(content, updated_at) as content
+      from raw_assisted_installer_clusters
+      group by ai_cluster_id),
+        host_data as
+     (select c.created_at as created_at,
+             c.cluster_id as cluster_id,
+             json_extract_scalar(h.content, '$.id') as host_id,
+             json_parse(json_extract_scalar(h.content, '$.validations_info')) as validations
+      from cluster_data as c
+      cross join unnest(cast(json_extract(c.content, '$.hosts') as array(json))) as h(content)),
+        host_validations as
+     (select h.created_at as created_at,
+             h.cluster_id as cluster_id,
+             h.host_id as host_id,
+             v.category as category,
+             v.id as id,
+             v.status as status,
+             v.message as message
+      from host_data as h
+      cross join unnest(flatten(transform(map_entries(cast(validations as map(varchar, array(row(id varchar, status varchar, message varchar))))), x -> transform(x[2], y -> row(x[1], y.id, y.status, y.message))))) as v(category, id, status, message)) select *
+   from host_validations) AS virtual_table
+WHERE created_at >= TIMESTAMP '2024-09-10 00:00:00.000000'
+  AND created_at < TIMESTAMP '2024-09-17 00:00:00.000000'
+  AND category = 'hardware'
+  AND id = 'compatible-agent'
+  AND status != 'success'
+LIMIT 50000;
